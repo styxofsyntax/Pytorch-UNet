@@ -1,9 +1,9 @@
 matplotlib
-numpy==1.23.5
-Pillow==11.0.0
-roboflow
+numpy==1.24.4
+Pillow==10.1.0
 scikit-image
 torch
 torchvision
 tqdm
 wandb==0.13.5
+roboflow
