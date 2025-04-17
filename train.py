@@ -19,9 +19,14 @@ from unet import UNet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 
-dir_img = Path('./data/imgs/')
-dir_mask = Path('./data/masks/')
+# dir_img = Path('./data/imgs/')
+# dir_mask = Path('./data/masks/')
 dir_checkpoint = Path('./checkpoints/')
+
+dir_train_img = "./Graid-Segmentation-2-2/train/images/"
+dir_train_mask = "./Graid-Segmentation-2-2/train/masks/"
+dir_valid_img = "./Graid-Segmentation-2-2/valid/images/"
+dir_valid_mask = "./Graid-Segmentation-2-2/valid/masks/"
 
 
 def train_model(
@@ -40,19 +45,28 @@ def train_model(
 ):
     # 1. Create dataset
     try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
+        train_dataset = CarvanaDataset(
+            dir_train_img, dir_train_mask, img_scale)
+        valid_dataset = CarvanaDataset(
+            dir_valid_img, dir_valid_mask, img_scale)
     except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale)
+        train_dataset = BasicDataset(dir_train_img, dir_train_mask, img_scale)
+        valid_dataset = BasicDataset(dir_valid_img, dir_valid_mask, img_scale)
 
     # 2. Split into train / validation partitions
-    n_val = int(len(dataset) * val_percent)
-    n_train = len(dataset) - n_val
-    train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
+    # n_val = int(len(dataset) * val_percent)
+    # n_train = len(dataset) - n_val
+    # train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
+
+    n_train = len(train_dataset)
+    n_val = len(valid_dataset)
 
     # 3. Create data loaders
-    loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
-    train_loader = DataLoader(train_set, shuffle=True, **loader_args)
-    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
+    loader_args = dict(batch_size=batch_size,
+                       num_workers=os.cpu_count(), pin_memory=True)
+    train_loader = DataLoader(train_dataset, shuffle=True, **loader_args)
+    val_loader = DataLoader(valid_dataset, shuffle=False,
+                            drop_last=True, **loader_args)
 
     # (Initialize logging)
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
@@ -76,7 +90,8 @@ def train_model(
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
     optimizer = optim.RMSprop(model.parameters(),
                               lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)  # goal: maximize Dice score
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 'max', patience=5)  # goal: maximize Dice score
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
@@ -94,26 +109,31 @@ def train_model(
                     f'but loaded images have {images.shape[1]} channels. Please check that ' \
                     'the images are loaded correctly.'
 
-                images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
+                images = images.to(
+                    device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 true_masks = true_masks.to(device=device, dtype=torch.long)
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     masks_pred = model(images)
                     if model.n_classes == 1:
-                        loss = criterion(masks_pred.squeeze(1), true_masks.float())
-                        loss += dice_loss(F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False)
+                        loss = criterion(masks_pred.squeeze(1),
+                                         true_masks.float())
+                        loss += dice_loss(F.sigmoid(masks_pred.squeeze(1)),
+                                          true_masks.float(), multiclass=False)
                     else:
                         loss = criterion(masks_pred, true_masks)
                         loss += dice_loss(
                             F.softmax(masks_pred, dim=1).float(),
-                            F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
+                            F.one_hot(true_masks, model.n_classes).permute(
+                                0, 3, 1, 2).float(),
                             multiclass=True
                         )
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clipping)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), gradient_clipping)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
 
@@ -135,14 +155,17 @@ def train_model(
                         for tag, value in model.named_parameters():
                             tag = tag.replace('/', '.')
                             if not (torch.isinf(value) | torch.isnan(value)).any():
-                                histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
+                                histograms['Weights/' +
+                                           tag] = wandb.Histogram(value.data.cpu())
                             if not (torch.isinf(value.grad) | torch.isnan(value.grad)).any():
-                                histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
+                                histograms['Gradients/' +
+                                           tag] = wandb.Histogram(value.grad.data.cpu())
 
                         val_score = evaluate(model, val_loader, device, amp)
                         scheduler.step(val_score)
 
-                        logging.info('Validation Dice score: {}'.format(val_score))
+                        logging.info(
+                            'Validation Dice score: {}'.format(val_score))
                         try:
                             experiment.log({
                                 'learning rate': optimizer.param_groups[0]['lr'],
@@ -162,24 +185,33 @@ def train_model(
         if save_checkpoint:
             Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
             state_dict = model.state_dict()
-            state_dict['mask_values'] = dataset.mask_values
-            torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
+            state_dict['mask_values'] = train_dataset.mask_values
+            torch.save(state_dict, str(dir_checkpoint /
+                       'checkpoint_epoch{}.pth'.format(epoch)))
             logging.info(f'Checkpoint {epoch} saved!')
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=1, help='Batch size')
+    parser = argparse.ArgumentParser(
+        description='Train the UNet on images and target masks')
+    parser.add_argument('--epochs', '-e', metavar='E',
+                        type=int, default=5, help='Number of epochs')
+    parser.add_argument('--batch-size', '-b', dest='batch_size',
+                        metavar='B', type=int, default=1, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
-    parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
-    parser.add_argument('--scale', '-s', type=float, default=0.5, help='Downscaling factor of the images')
+    parser.add_argument('--load', '-f', type=str,
+                        default=False, help='Load model from a .pth file')
+    parser.add_argument('--scale', '-s', type=float,
+                        default=0.5, help='Downscaling factor of the images')
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
-    parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
-    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--amp', action='store_true',
+                        default=False, help='Use mixed precision')
+    parser.add_argument('--bilinear', action='store_true',
+                        default=False, help='Use bilinear upsampling')
+    parser.add_argument('--classes', '-c', type=int,
+                        default=2, help='Number of classes')
 
     return parser.parse_args()
 
@@ -187,7 +219,8 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    logging.basicConfig(level=logging.INFO,
+                        format='%(levelname)s: %(message)s')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
 
