@@ -23,9 +23,9 @@ from utils.dice_score import dice_loss
 # dir_mask = Path('./data/masks/')
 dir_checkpoint = Path('./checkpoints/')
 
-dir_train_img = "./Graid-Segmentation-2-2/train/images/"
+dir_train_img = "./Graid-Segmentation-2-2/train/pre-processed/"
 dir_train_mask = "./Graid-Segmentation-2-2/train/masks/"
-dir_valid_img = "./Graid-Segmentation-2-2/valid/images/"
+dir_valid_img = "./Graid-Segmentation-2-2/valid/pre-processed/"
 dir_valid_mask = "./Graid-Segmentation-2-2/valid/masks/"
 
 
